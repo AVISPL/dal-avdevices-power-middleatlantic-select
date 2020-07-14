@@ -13,11 +13,26 @@ import com.avispl.symphony.dal.communicator.middleatlantic.SocketCommunicator;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
-import java.util.*;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.Iterator;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static com.avispl.symphony.dal.communicator.middleatlantic.select.MiddleAtlanticSelectControls.*;
 
+/**
+ * An implementation of SocketCommunicator to provide TCP communication with Middle Atlantic Select devices
+ * Controlling functionality:
+ *      - Outlets switch on/off
+ *      - On/Off Sequence initiation
+ * @version 1.0
+ * @author Maksym.Rossiytsev
+ */
 public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator implements Monitorable, Controller {
     private static final int CONTROLS_COOLDOWN_PERIOD = 5000;
     private final ReentrantLock controlOperationsLock = new ReentrantLock();

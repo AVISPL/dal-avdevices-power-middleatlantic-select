@@ -1,6 +1,3 @@
-/*
- * Copyright (c) 2020 AVI-SPL Inc. All Rights Reserved.
- */
 package com.avispl.symphony.dal.communicator.middleatlantic;
 
 import com.avispl.symphony.api.dal.dto.control.ConnectionState;
@@ -9,7 +6,10 @@ import com.avispl.symphony.dal.BaseDevice;
 import com.avispl.symphony.dal.communicator.Communicator;
 import com.avispl.symphony.dal.communicator.ConnectionStatus;
 
-import java.io.*;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.BufferedInputStream;
+import java.io.InputStream;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
@@ -20,6 +20,11 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+/**
+ * TCP Socket communicator
+ * @author Jonathan.Gillot
+ *
+ * */
 public class SocketCommunicator extends BaseDevice implements Communicator {
     private Socket socket;
     private int port;
@@ -29,9 +34,13 @@ public class SocketCommunicator extends BaseDevice implements Communicator {
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final ConnectionStatus status = new ConnectionStatus();
+    private final int socketTimeout = 30000;
 
     protected String login;
     protected String password;
+
+    protected static final char[] hexArray = "0123456789ABCDEF".toCharArray();
+
     /**
      * Empty constructor
      */
@@ -189,7 +198,7 @@ public class SocketCommunicator extends BaseDevice implements Communicator {
         try {
             if (this.socket == null || this.socket.isClosed() || !this.socket.isConnected()) {
                 this.socket = new Socket(this.host, this.port);
-                this.socket.setSoTimeout(30000);
+                this.socket.setSoTimeout(socketTimeout);
             }
 
         }catch (UnknownHostException ex) {
@@ -252,8 +261,6 @@ public class SocketCommunicator extends BaseDevice implements Communicator {
             return var3;
         }
     }
-
-    protected static final char[] hexArray = "0123456789ABCDEF".toCharArray();
 
     /**
      * This method is used to generate a string from a byte array
@@ -361,7 +368,6 @@ public class SocketCommunicator extends BaseDevice implements Communicator {
 
     private void write(byte[] outputData) throws Exception {
         OutputStream os = this.socket.getOutputStream();
-
         os.write(outputData);
         os.flush();
     }
@@ -390,7 +396,9 @@ public class SocketCommunicator extends BaseDevice implements Communicator {
     }
 
     protected boolean doneReading(String command, String response) throws CommandFailureException {
-        System.out.println(response);
+        if(logger.isDebugEnabled()){
+            logger.debug("Done reading with a response: " + response);
+        }
         Iterator var3 = this.commandErrorList.iterator();
 
         String string;
@@ -409,7 +417,6 @@ public class SocketCommunicator extends BaseDevice implements Communicator {
                 if (this.logger.isTraceEnabled()) {
                     this.logger.trace("Done reading, found success string: " + string + " from: " + this.host + " port: " + this.port);
                 }
-
                 return true;
             }
 
