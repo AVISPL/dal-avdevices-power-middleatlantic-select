@@ -3,7 +3,7 @@
  */
 package com.avispl.symphony.dal.communicator.middleatlantic.select;
 
-public final class MiddleAtlanticSelectControls {
+final class MiddleAtlanticSelectControls {
     public static final byte HEAD = (byte) 0xFE;
     public static final byte TAIL = (byte) 0xFF;
     public static final byte SUBCOMMAND_SET = 0x01;
