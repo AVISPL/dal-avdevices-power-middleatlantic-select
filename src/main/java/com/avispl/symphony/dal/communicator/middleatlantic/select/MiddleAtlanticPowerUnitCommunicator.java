@@ -513,18 +513,35 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                 }
                 replaceLocalStatisticsControls(SEQUENCE_UP_COMMAND_NAME, SEQUENCE_DOWN_COMMAND_NAME);
                 statistics.keySet().forEach(s -> { if("0".equals(statistics.get(s))) statistics.put(s, "1"); });
+                processOutletsSequence(1);
             } else if (sequence == 0x03){
                 if(logger.isDebugEnabled()){
                     logger.debug("Removing 'Sequence down' button from local statistics.");
                 }
                 replaceLocalStatisticsControls(SEQUENCE_DOWN_COMMAND_NAME, SEQUENCE_UP_COMMAND_NAME);
                 statistics.keySet().forEach(s -> { if("1".equals(statistics.get(s))) statistics.put(s, "0"); });
+                processOutletsSequence(0);
             }
 
             if(logger.isDebugEnabled()){
                 logger.debug("Sequence button removed from local statistics.");
             }
         }
+    }
+
+    /**
+     * In order to update controls after sequencing we need to update control value and it's timestamp
+     * otherwise the value won't be refreshed within "extraProperties" during the statistics collection
+     * cycle that was triggered by control action
+     * @param state new state of the controllable property
+     * */
+    private void processOutletsSequence(int state){
+        localStatistics.getControllableProperties().forEach(cp -> {
+            if(cp.getName().startsWith("Controllable outlets")) {
+                cp.setValue(state);
+                cp.setTimestamp(new Date());
+            }
+        });
     }
 
     /**
