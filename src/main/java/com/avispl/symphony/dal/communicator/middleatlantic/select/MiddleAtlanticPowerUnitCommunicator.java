@@ -106,17 +106,17 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
     @Override
     public List<Statistics> getMultipleStatistics() throws Exception {
         ExtendedStatistics statistics = new ExtendedStatistics();
-        if(isValidControlCoolDown() && localStatistics != null){
-            if (logger.isDebugEnabled()) {
-                logger.debug("Device is occupied by control operations. Skipping monitoring statistics retrieval.");
-            }
-            statistics.setStatistics(localStatistics.getStatistics());
-            statistics.setControllableProperties(localStatistics.getControllableProperties());
-            return Collections.singletonList(statistics);
-        }
-
         controlOperationsLock.lock();
         try {
+            if(isValidControlCoolDown() && localStatistics != null){
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Device is occupied by control operations. Skipping monitoring statistics retrieval.");
+                }
+                statistics.setStatistics(localStatistics.getStatistics());
+                statistics.setControllableProperties(localStatistics.getControllableProperties());
+                return Collections.singletonList(statistics);
+            }
+
             if (logger.isDebugEnabled()) {
                 logger.debug("Device is not occupied by control operations. Retrieving monitoring statistics.");
             }
