@@ -48,7 +48,8 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
     private Exception latestException = null;
     private long latestControlTimestamp;
     /**
-     *
+     * To avoid timeout errors, caused by the unavailability of the control protocol, all polling-dependent communication operations (monitoring)
+     * should be performed asynchronously. This executor service executes such operations.
      */
     private static ExecutorService executorService;
 
