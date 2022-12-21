@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.Iterator;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
@@ -51,7 +52,10 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
      * To avoid timeout errors, caused by the unavailability of the control protocol, all polling-dependent communication operations (monitoring)
      * should be performed asynchronously. This executor service executes such operations.
      */
-    private static ExecutorService executorService;
+    private ExecutorService executorService;
+    /**
+     * */
+    private CompletableFuture dataCollector;
 
     public MiddleAtlanticPowerUnitCommunicator(){
         super();
@@ -73,6 +77,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
     @Override
     protected void internalDestroy() {
         try {
+            dataCollector.cancel(true);
             executorService.shutdownNow();
             disconnect();
         } catch (Exception e) {
@@ -143,7 +148,9 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
         statistics.setStatistics(outletsStatistics);
         statistics.setControllableProperties(controllableProperties);
         if (localStatistics == null) {
-            localStatistics = statistics;
+            localStatistics = new ExtendedStatistics();
+            localStatistics.setStatistics(new HashMap<>());
+            localStatistics.setControllableProperties(new ArrayList<>());
         }
         if(isValidControlCoolDown() && localStatistics != null){
             if (logger.isDebugEnabled()) {
@@ -154,33 +161,38 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
             return Collections.singletonList(statistics);
         }
 
-        runAsync(() -> {
-            controlOperationsLock.lock();
-            Map<String, String> internalOutletStatistics = localStatistics.getStatistics();
-            List<AdvancedControllableProperty> internalControllableProperties = localStatistics.getControllableProperties();
-            try {
-                if (logger.isDebugEnabled()) {
-                    logger.debug("Device is not occupied by control operations. Retrieving monitoring statistics.");
-                }
-                refreshTCPSession();
-
-                fetchOutletsData(internalOutletStatistics, internalControllableProperties);
-                internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, AVAILABLE);
-                latestException = null;
-            } catch (Exception ce) {
-                if (ce instanceof ConnectException) {
-                    String message = ce.getMessage();
-                    if (!StringUtils.isEmpty(message) && message.contains("Connection timed out")) {
-                        logger.warn("Connection timed out: Unable to connect to the device, TCP protocol is occupied.");
-                        internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, UNAVAILABLE);
-                    } else {
-                        latestException = ce;
+        if (dataCollector == null || dataCollector.isDone()) {
+            dataCollector = runAsync(() -> {
+                controlOperationsLock.lock();
+                Map<String, String> internalOutletStatistics = localStatistics.getStatistics();
+                List<AdvancedControllableProperty> internalControllableProperties = localStatistics.getControllableProperties();
+                try {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Device is not occupied by control operations. Retrieving monitoring statistics.");
                     }
+                    refreshTCPSession();
+
+                    fetchOutletsData(internalOutletStatistics, internalControllableProperties);
+                    internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, AVAILABLE);
+                    latestException = null;
+                } catch (Exception ce) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Exception white collecting device data.", ce);
+                    }
+                    if (ce instanceof ConnectException) {
+                        String message = ce.getMessage();
+                        if (!StringUtils.isEmpty(message) && message.contains("Connection timed out")) {
+                            logger.warn("Connection timed out: Unable to connect to the device, TCP protocol is occupied.");
+                            internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, UNAVAILABLE);
+                        } else {
+                            latestException = ce;
+                        }
+                    }
+                } finally {
+                    controlOperationsLock.unlock();
                 }
-            } finally {
-                controlOperationsLock.unlock();
-            }
-        }, executorService);
+            }, executorService);
+        }
         if (latestException != null) {
             throw latestException;
         }
@@ -358,6 +370,9 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
      * @throws Exception during TCP communication
      */
     private void fetchOutletsData(Map<String, String> outletsStatistics, List<AdvancedControllableProperty> controllableProperties) throws Exception {
+        if (logger.isDebugEnabled()) {
+            logger.debug("Fetching outlet information for device " + getHost());
+        }
         byte[] outletsRequest = new byte[]{HEAD, 0x03, 0x00, 0x22, 0x02, 0x25, TAIL};
         byte[] response = send(outletsRequest);
         byte[] data = Arrays.copyOfRange(response, 5, response.length - 2); // 4 bytes envelope at the beginning and 2 at the end
