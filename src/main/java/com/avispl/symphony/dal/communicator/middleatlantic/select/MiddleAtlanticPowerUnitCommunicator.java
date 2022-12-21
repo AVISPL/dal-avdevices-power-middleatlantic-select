@@ -148,7 +148,9 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
         statistics.setStatistics(outletsStatistics);
         statistics.setControllableProperties(controllableProperties);
         if (localStatistics == null) {
-            localStatistics = statistics;
+            localStatistics = new ExtendedStatistics();
+            localStatistics.setStatistics(new HashMap<>());
+            localStatistics.setControllableProperties(new ArrayList<>());
         }
         if(isValidControlCoolDown() && localStatistics != null){
             if (logger.isDebugEnabled()) {
@@ -174,6 +176,9 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                     internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, AVAILABLE);
                     latestException = null;
                 } catch (Exception ce) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Exception white collecting device data.", ce);
+                    }
                     if (ce instanceof ConnectException) {
                         String message = ce.getMessage();
                         if (!StringUtils.isEmpty(message) && message.contains("Connection timed out")) {
@@ -365,6 +370,9 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
      * @throws Exception during TCP communication
      */
     private void fetchOutletsData(Map<String, String> outletsStatistics, List<AdvancedControllableProperty> controllableProperties) throws Exception {
+        if (logger.isDebugEnabled()) {
+            logger.debug("Fetching outlet information for device " + getHost());
+        }
         byte[] outletsRequest = new byte[]{HEAD, 0x03, 0x00, 0x22, 0x02, 0x25, TAIL};
         byte[] response = send(outletsRequest);
         byte[] data = Arrays.copyOfRange(response, 5, response.length - 2); // 4 bytes envelope at the beginning and 2 at the end
