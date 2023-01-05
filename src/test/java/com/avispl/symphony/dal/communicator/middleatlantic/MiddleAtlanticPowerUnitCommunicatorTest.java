@@ -24,16 +24,20 @@ public class MiddleAtlanticPowerUnitCommunicatorTest {
     @BeforeEach
     public void init() throws Exception {
         middleAtlanticPowerUnitCommunicator = new MiddleAtlanticPowerUnitCommunicator();
-        middleAtlanticPowerUnitCommunicator.setHost("10.254.254.153");
+        middleAtlanticPowerUnitCommunicator.setHost("***REMOVED***");
         middleAtlanticPowerUnitCommunicator.setPort(60000);
         middleAtlanticPowerUnitCommunicator.setLogin("user");
-        middleAtlanticPowerUnitCommunicator.setPassword("password");
+        middleAtlanticPowerUnitCommunicator.setPassword("12345");
         middleAtlanticPowerUnitCommunicator.init();
     }
 
     @Test
     public void outletControlTest() throws Exception {
         List<Statistics> initialStatistics = middleAtlanticPowerUnitCommunicator.getMultipleStatistics();
+        Thread.sleep(30000);
+        initialStatistics = middleAtlanticPowerUnitCommunicator.getMultipleStatistics();
+        Thread.sleep(30000);
+        initialStatistics = middleAtlanticPowerUnitCommunicator.getMultipleStatistics();
 
         String outletName = "Outlet 1 - 1";
         String initialOutletValue = ((ExtendedStatistics)initialStatistics.get(0)).getStatistics().get(outletName);
