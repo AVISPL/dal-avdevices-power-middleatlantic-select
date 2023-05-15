@@ -14,14 +14,7 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 import java.net.ConnectException;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.Arrays;
-import java.util.Date;
-import java.util.Iterator;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -184,6 +177,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                         if (!StringUtils.isEmpty(message) && message.contains("Connection timed out")) {
                             logger.warn("Connection timed out: Unable to connect to the device, TCP protocol is occupied.");
                             internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, UNAVAILABLE);
+                            localStatistics.getControllableProperties().clear();
                         } else {
                             latestException = ce;
                         }
@@ -400,7 +394,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                 outletsStatistics.put(outletName, controllableOutlet ? String.valueOf(outletStatus) :  outletStatus == 1 ? "On" : "Off");
 
                 if (controllableOutlet) {
-                    controllableProperties.add(createOutletSwitch(outletName, outletStatus));
+                    addControl(controllableProperties, createOutletSwitch(outletName, outletStatus));
                     if(outletStatus == 1){
                         enabledControlled++;
                     } else {
@@ -413,20 +407,38 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
 
         if(enabledControlled + disabledControlled > 0){
             if(enabledControlled == 0){
-                controllableProperties.add(createSequenceButton(SEQUENCE_UP_COMMAND_NAME));
+                addControl(controllableProperties, createSequenceButton(SEQUENCE_UP_COMMAND_NAME));
                 outletsStatistics.put(SEQUENCE_UP_COMMAND_NAME, "");
             } else if (disabledControlled == 0){
-                controllableProperties.add(createSequenceButton(SEQUENCE_DOWN_COMMAND_NAME));
+                addControl(controllableProperties, createSequenceButton(SEQUENCE_DOWN_COMMAND_NAME));
                 outletsStatistics.put(SEQUENCE_DOWN_COMMAND_NAME, "");
             } else {
-                controllableProperties.add(createSequenceButton(SEQUENCE_UP_COMMAND_NAME));
-                controllableProperties.add(createSequenceButton(SEQUENCE_DOWN_COMMAND_NAME));
+                addControl(controllableProperties, createSequenceButton(SEQUENCE_UP_COMMAND_NAME));
+                addControl(controllableProperties, createSequenceButton(SEQUENCE_DOWN_COMMAND_NAME));
                 outletsStatistics.put(SEQUENCE_UP_COMMAND_NAME, "");
                 outletsStatistics.put(SEQUENCE_DOWN_COMMAND_NAME, "");
             }
         }
     }
 
+    /**
+     * Adds controllable property in list of controllable properties, if such property does not exist
+     *
+     * @param advancedControllableProperties list to keep all controls in
+     * @param newProperty new controllable property
+     * */
+    private void addControl(List<AdvancedControllableProperty> advancedControllableProperties, AdvancedControllableProperty newProperty) {
+        Optional<AdvancedControllableProperty> controllableProperty = advancedControllableProperties.stream().filter(property ->
+                newProperty.getName().equals(property.getName())).findFirst();
+        if(!controllableProperty.isPresent()) {
+            advancedControllableProperties.add(newProperty);
+        } else {
+            if (logger.isDebugEnabled()) {
+                logger.debug(String.format("Controllable property %s already exists. Updating property value.", newProperty.getName()));
+            }
+            controllableProperty.ifPresent(advancedControllableProperty -> advancedControllableProperty.setValue(newProperty.getValue()));
+        }
+    }
     /**
      * Create an ON|OFF sequence button
      * @param sequenceCommandName name of the sequence
@@ -621,7 +633,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                 advancedControllablePropertyIterator.remove();
             }
         }
-        localStatistics.getControllableProperties().add(createSequenceButton(newName));
+        addControl(localStatistics.getControllableProperties(), createSequenceButton(newName));
         if(logger.isDebugEnabled()){
             logger.debug("Controllable properties available after cleanup: " + localStatistics.getControllableProperties());
         }
@@ -651,14 +663,14 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                     replaceLocalStatisticsControls(SEQUENCE_UP_COMMAND_NAME, SEQUENCE_DOWN_COMMAND_NAME);
                 } else if(outletsOn == 1) {
                     localStatistics.getStatistics().put(SEQUENCE_DOWN_COMMAND_NAME, "");
-                    localStatistics.getControllableProperties().add(createSequenceButton(SEQUENCE_DOWN_COMMAND_NAME));
+                    addControl(localStatistics.getControllableProperties(), createSequenceButton(SEQUENCE_DOWN_COMMAND_NAME));
                 }
             } else if(requestedState.equals("0")){
                 if(outletsOn == 0) {
                     replaceLocalStatisticsControls(SEQUENCE_DOWN_COMMAND_NAME, SEQUENCE_UP_COMMAND_NAME);
                 } else if(outletsOff == 1) {
                     localStatistics.getStatistics().put(SEQUENCE_UP_COMMAND_NAME, "");
-                    localStatistics.getControllableProperties().add(createSequenceButton(SEQUENCE_UP_COMMAND_NAME));
+                    addControl(localStatistics.getControllableProperties(), createSequenceButton(SEQUENCE_UP_COMMAND_NAME));
                 }
             }
         }
