@@ -7,6 +7,8 @@ import com.avispl.symphony.api.dal.dto.control.ControllableProperty;
 import com.avispl.symphony.api.dal.dto.monitor.ExtendedStatistics;
 import com.avispl.symphony.api.dal.dto.monitor.Statistics;
 import com.avispl.symphony.dal.communicator.middleatlantic.select.MiddleAtlanticPowerUnitCommunicator;
+import com.google.common.base.Optional;
+import org.checkerframework.checker.optional.qual.Present;
 import org.junit.Assert;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -22,16 +24,20 @@ public class MiddleAtlanticPowerUnitCommunicatorTest {
     @BeforeEach
     public void init() throws Exception {
         middleAtlanticPowerUnitCommunicator = new MiddleAtlanticPowerUnitCommunicator();
-        middleAtlanticPowerUnitCommunicator.setHost("172.31.254.155");
+        middleAtlanticPowerUnitCommunicator.setHost("***REMOVED***");
         middleAtlanticPowerUnitCommunicator.setPort(60000);
         middleAtlanticPowerUnitCommunicator.setLogin("user");
-        middleAtlanticPowerUnitCommunicator.setPassword("1234");
+        middleAtlanticPowerUnitCommunicator.setPassword("12345");
         middleAtlanticPowerUnitCommunicator.init();
     }
 
     @Test
     public void outletControlTest() throws Exception {
         List<Statistics> initialStatistics = middleAtlanticPowerUnitCommunicator.getMultipleStatistics();
+        Thread.sleep(30000);
+        initialStatistics = middleAtlanticPowerUnitCommunicator.getMultipleStatistics();
+        Thread.sleep(30000);
+        initialStatistics = middleAtlanticPowerUnitCommunicator.getMultipleStatistics();
 
         String outletName = "Outlet 1 - 1";
         String initialOutletValue = ((ExtendedStatistics)initialStatistics.get(0)).getStatistics().get(outletName);
