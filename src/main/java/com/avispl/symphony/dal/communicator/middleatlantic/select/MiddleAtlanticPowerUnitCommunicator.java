@@ -9,7 +9,7 @@ import com.avispl.symphony.api.dal.dto.control.ControllableProperty;
 import com.avispl.symphony.api.dal.dto.monitor.ExtendedStatistics;
 import com.avispl.symphony.api.dal.dto.monitor.Statistics;
 import com.avispl.symphony.api.dal.monitor.Monitorable;
-import com.avispl.symphony.dal.communicator.SocketCommunicator;
+import com.avispl.symphony.dal.communicator.middleatlantic.select.core.SocketCommunicator;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
