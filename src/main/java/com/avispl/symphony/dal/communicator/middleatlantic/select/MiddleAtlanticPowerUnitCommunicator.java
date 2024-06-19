@@ -5,6 +5,7 @@ package com.avispl.symphony.dal.communicator.middleatlantic.select;
 
 import com.avispl.symphony.api.dal.control.Controller;
 import com.avispl.symphony.api.dal.dto.control.AdvancedControllableProperty;
+import com.avispl.symphony.api.dal.dto.control.ConnectionState;
 import com.avispl.symphony.api.dal.dto.control.ControllableProperty;
 import com.avispl.symphony.api.dal.dto.monitor.ExtendedStatistics;
 import com.avispl.symphony.api.dal.dto.monitor.Statistics;
@@ -118,6 +119,8 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                 }
             }
         } finally {
+            this.destroyChannel();
+            this.getConnectionStatus().setConnectionState(ConnectionState.Disconnected);
             controlOperationsLock.unlock();
         }
     }
@@ -183,6 +186,8 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                         }
                     }
                 } finally {
+                    this.destroyChannel();
+                    this.getConnectionStatus().setConnectionState(ConnectionState.Disconnected);
                     controlOperationsLock.unlock();
                 }
             }, executorService);
