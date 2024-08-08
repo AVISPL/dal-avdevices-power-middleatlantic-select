@@ -119,6 +119,13 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
             }
         } finally {
             controlOperationsLock.unlock();
+            dataCollector.cancel(true);
+            executorService.shutdownNow();
+            try {
+                disconnect();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
@@ -184,6 +191,13 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                     }
                 } finally {
                     controlOperationsLock.unlock();
+                    dataCollector.cancel(true);
+                    executorService.shutdownNow();
+                    try {
+                        disconnect();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
                 }
             }, executorService);
         }
