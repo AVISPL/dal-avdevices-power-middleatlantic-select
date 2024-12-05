@@ -161,46 +161,52 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
             return Collections.singletonList(statistics);
         }
 
-        if (dataCollector == null || dataCollector.isDone()) {
-            dataCollector = runAsync(() -> {
-                controlOperationsLock.lock();
-                Map<String, String> internalOutletStatistics = localStatistics.getStatistics();
-                List<AdvancedControllableProperty> internalControllableProperties = localStatistics.getControllableProperties();
-                try {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Device is not occupied by control operations. Retrieving monitoring statistics.");
-                    }
-                    refreshTCPSession();
+        if (executorService.isShutdown() || executorService.isTerminated()) {
+            // If executor service was shut down or terminated prior to this point
+            executorService = Executors.newFixedThreadPool(1);
+        }
+        if (dataCollector != null && !dataCollector.isDone()) {
+            // If previous task is delayed and is not over
+            dataCollector.cancel(true);
+            dataCollector = null;
+        }
+        dataCollector = runAsync(() -> {
+            controlOperationsLock.lock();
+            Map<String, String> internalOutletStatistics = localStatistics.getStatistics();
+            List<AdvancedControllableProperty> internalControllableProperties = localStatistics.getControllableProperties();
+            try {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Device is not occupied by control operations. Retrieving monitoring statistics.");
+                }
+                refreshTCPSession();
 
-                    fetchOutletsData(internalOutletStatistics, internalControllableProperties);
-                    internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, AVAILABLE);
-                    latestException = null;
-                } catch (Exception ce) {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Exception white collecting device data.", ce);
-                    }
-                    if (ce instanceof ConnectException) {
-                        String message = ce.getMessage();
-                        if (!StringUtils.isEmpty(message) && message.contains("Connection timed out")) {
-                            logger.warn("Connection timed out: Unable to connect to the device, TCP protocol is occupied.");
-                            internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, UNAVAILABLE);
-                            localStatistics.getControllableProperties().clear();
-                        } else {
-                            latestException = ce;
-                        }
-                    }
-                } finally {
-                    controlOperationsLock.unlock();
-                    dataCollector.cancel(true);
-                    executorService.shutdownNow();
-                    try {
-                        disconnect();
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
+                fetchOutletsData(internalOutletStatistics, internalControllableProperties);
+                internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, AVAILABLE);
+                latestException = null;
+            } catch (Exception ce) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Exception white collecting device data.", ce);
+                }
+                if (ce instanceof ConnectException) {
+                    String message = ce.getMessage();
+                    if (!StringUtils.isEmpty(message) && message.contains("Connection timed out")) {
+                        logger.warn("Connection timed out: Unable to connect to the device, TCP protocol is occupied.");
+                        internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, UNAVAILABLE);
+                        localStatistics.getControllableProperties().clear();
+                    } else {
+                        latestException = ce;
                     }
                 }
-            }, executorService);
-        }
+            } finally {
+                controlOperationsLock.unlock();
+                try {
+                    disconnect();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }, executorService);
+
         if (latestException != null) {
             throw latestException;
         }
