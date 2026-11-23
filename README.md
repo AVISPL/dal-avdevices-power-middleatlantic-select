@@ -49,4 +49,5 @@ Outlets the device reports as not present are not listed.
 **Build project with unit tests: ``` mvn clean install ```**
 
 **Run integration tests against a real device: ``` mvn test -DexcludedGroups= -Dgroups=integrationTest ```**
-(set the device address and credentials in `MiddleAtlanticPowerUnitCommunicatorTest` first)
+(set the device address and credentials in the `MIDDLEATLANTIC_HOST`, `MIDDLEATLANTIC_PORT`, `MIDDLEATLANTIC_LOGIN`
+and `MIDDLEATLANTIC_PASSWORD` environment variables; never commit them)

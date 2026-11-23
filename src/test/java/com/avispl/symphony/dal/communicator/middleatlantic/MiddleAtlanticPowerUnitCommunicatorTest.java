@@ -24,11 +24,18 @@ public class MiddleAtlanticPowerUnitCommunicatorTest {
     @BeforeEach
     public void init() throws Exception {
         middleAtlanticPowerUnitCommunicator = new MiddleAtlanticPowerUnitCommunicator();
-        middleAtlanticPowerUnitCommunicator.setHost("***REMOVED***");
-        middleAtlanticPowerUnitCommunicator.setPort(60000);
-        middleAtlanticPowerUnitCommunicator.setLogin("user");
-        middleAtlanticPowerUnitCommunicator.setPassword("12345");
+        // Device address and credentials come from the environment, never from source:
+        // MIDDLEATLANTIC_HOST, MIDDLEATLANTIC_PORT, MIDDLEATLANTIC_LOGIN, MIDDLEATLANTIC_PASSWORD
+        middleAtlanticPowerUnitCommunicator.setHost(env("MIDDLEATLANTIC_HOST", "***REMOVED***"));
+        middleAtlanticPowerUnitCommunicator.setPort(Integer.parseInt(env("MIDDLEATLANTIC_PORT", "60000")));
+        middleAtlanticPowerUnitCommunicator.setLogin(env("MIDDLEATLANTIC_LOGIN", "user"));
+        middleAtlanticPowerUnitCommunicator.setPassword(env("MIDDLEATLANTIC_PASSWORD", "12345"));
         middleAtlanticPowerUnitCommunicator.init();
+    }
+
+    private static String env(String name, String fallback) {
+        String value = System.getenv(name);
+        return value == null || value.isEmpty() ? fallback : value;
     }
 
     @Test
