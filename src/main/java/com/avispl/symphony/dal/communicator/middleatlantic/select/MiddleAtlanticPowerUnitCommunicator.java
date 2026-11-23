@@ -229,7 +229,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
             }
             if (ce instanceof ConnectException) {
                 String message = ce.getMessage();
-                if (!StringUtils.isEmpty(message) && message.contains("Connection timed out")) {
+                if (StringUtils.hasLength(message) && message.contains("Connection timed out")) {
                     logger.warn("Connection timed out: Unable to connect to the device, TCP protocol is occupied.");
                     synchronized (statisticsLock) {
                         // Keep the last known values, mark the protocol unavailable and drop the controls
@@ -537,7 +537,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
 
                 // The name is informational only: a failed lookup omits the name entry but never skips the outlet
                 String deviceOutletName = getOutletName((byte) number);
-                if (!StringUtils.isEmpty(deviceOutletName)) {
+                if (StringUtils.hasLength(deviceOutletName)) {
                     outletsStatistics.put(outletName + OUTLET_NAME_SUFFIX, deviceOutletName);
                 }
 
