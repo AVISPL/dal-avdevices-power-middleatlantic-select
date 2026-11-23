@@ -36,19 +36,34 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
     private static final String CONTROL_PROTOCOL_STATUS_PROPERTY = "ControlProtocolStatus";
     private static final String AVAILABLE = "AVAILABLE";
     private static final String UNAVAILABLE = "UNAVAILABLE";
+    private static final String OUTLETS_GROUP = "Outlets#";
+    private static final String OUTLET_PREFIX = "Outlet";
+    private static final String OUTLET_NAME_SUFFIX = "Name";
+    /** Matches outlet state keys only (Outlets#Outlet<n>), not the Outlets#Outlet<n>Name entries in the same group */
+    private static final java.util.regex.Pattern OUTLET_STATE_KEY = java.util.regex.Pattern.compile(java.util.regex.Pattern.quote(OUTLETS_GROUP + OUTLET_PREFIX) + "\\d+");
 
     private final ReentrantLock controlOperationsLock = new ReentrantLock();
-    private ExtendedStatistics localStatistics;
-    private Exception latestException = null;
+    /**
+     * Guards {@link #localStatistics}. Held only for short in-memory operations (snapshot copy, swap, control-driven
+     * updates), never during TCP communication, so getMultipleStatistics is never blocked by a slow device.
+     */
+    private final Object statisticsLock = new Object();
+    /**
+     * Latest complete snapshot of device data. Replaced as a whole by the data collector once a collection cycle is
+     * finished, so readers never observe a half-collected state. Guarded by {@link #statisticsLock}.
+     */
+    private ExtendedStatistics localStatistics = createStatistics(new HashMap<>(), new ArrayList<>());
+    private final AdapterMetadata adapterMetadata = new AdapterMetadata();
+    private volatile Exception latestException = null;
     private long latestControlTimestamp;
     /**
      * To avoid timeout errors, caused by the unavailability of the control protocol, all polling-dependent communication operations (monitoring)
      * should be performed asynchronously. This executor service executes such operations.
      */
-    private ExecutorService executorService;
+    private volatile ExecutorService executorService;
     /**
      * */
-    private CompletableFuture dataCollector;
+    private volatile CompletableFuture dataCollector;
 
     public MiddleAtlanticPowerUnitCommunicator(){
         super();
@@ -70,8 +85,12 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
     @Override
     protected void internalDestroy() {
         try {
-            dataCollector.cancel(true);
-            executorService.shutdownNow();
+            if (dataCollector != null) {
+                dataCollector.cancel(true);
+            }
+            if (executorService != null) {
+                executorService.shutdownNow();
+            }
             disconnect();
         } catch (Exception e) {
             logger.warn("Unable to end the TCP connection.", e);
@@ -88,9 +107,11 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
         if(logger.isInfoEnabled()){
             logger.debug(String.format("Received controllable property '%s' with value '%s'", property, value));
         }
-        refreshTCPSession();
         controlOperationsLock.lock();
         try {
+            // Session refresh (ping/login) uses the socket, so it must happen under the lock to never interleave
+            // with the data collector's requests
+            refreshTCPSession();
             if(property.equals(SEQUENCE_DOWN_COMMAND_NAME)){
                 boolean result = sendSequencingCommand(buildSequenceCommand(DOWN_SEQUENCE));
                 if(result) {
@@ -101,8 +122,8 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                 if(result){
                     updateLocalSequencingStatistics(UP_SEQUENCE);
                 }
-            } else if(property.matches(".+?-\\s\\d")){
-                byte outletNumber = Byte.parseByte(property.substring(property.lastIndexOf(" ") + 1));
+            } else if(isOutletStateKey(property)){
+                byte outletNumber = Byte.parseByte(property.substring(property.lastIndexOf(OUTLET_PREFIX) + OUTLET_PREFIX.length()));
                 byte response;
                 switch (value) {
                     case "1":
@@ -118,13 +139,14 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                 }
             }
         } finally {
-            controlOperationsLock.unlock();
-            dataCollector.cancel(true);
-            executorService.shutdownNow();
+            // Release the single TCP connection the device allows. A collection cycle queued behind this control
+            // will skip itself because of the control cooldown (see collectDeviceData)
             try {
                 disconnect();
             } catch (Exception e) {
-                throw new RuntimeException(e);
+                logger.warn("Unable to end the TCP connection after control operation.", e);
+            } finally {
+                controlOperationsLock.unlock();
             }
         }
     }
@@ -142,23 +164,11 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
 
     @Override
     public List<Statistics> getMultipleStatistics() throws Exception {
-        ExtendedStatistics statistics = new ExtendedStatistics();
-        Map<String, String> outletsStatistics = new HashMap<>();
-        List<AdvancedControllableProperty> controllableProperties = new ArrayList<>();
-        statistics.setStatistics(outletsStatistics);
-        statistics.setControllableProperties(controllableProperties);
-        if (localStatistics == null) {
-            localStatistics = new ExtendedStatistics();
-            localStatistics.setStatistics(new HashMap<>());
-            localStatistics.setControllableProperties(new ArrayList<>());
-        }
-        if(isValidControlCoolDown() && localStatistics != null){
+        if(isValidControlCoolDown()){
             if (logger.isDebugEnabled()) {
                 logger.debug("Device is occupied by control operations. Skipping monitoring statistics retrieval.");
             }
-            outletsStatistics.putAll(localStatistics.getStatistics());
-            controllableProperties.addAll(localStatistics.getControllableProperties());
-            return Collections.singletonList(statistics);
+            return Collections.singletonList(copyLocalStatistics());
         }
 
         if (executorService.isShutdown() || executorService.isTerminated()) {
@@ -166,53 +176,167 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
             executorService = Executors.newFixedThreadPool(1);
         }
         if (dataCollector != null && !dataCollector.isDone()) {
-            // If previous task is delayed and is not over
-            dataCollector.cancel(true);
-            dataCollector = null;
-        }
-        dataCollector = runAsync(() -> {
-            controlOperationsLock.lock();
-            Map<String, String> internalOutletStatistics = localStatistics.getStatistics();
-            List<AdvancedControllableProperty> internalControllableProperties = localStatistics.getControllableProperties();
-            try {
-                if (logger.isDebugEnabled()) {
-                    logger.debug("Device is not occupied by control operations. Retrieving monitoring statistics.");
-                }
-                refreshTCPSession();
-
-                fetchOutletsData(internalOutletStatistics, internalControllableProperties);
-                internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, AVAILABLE);
-                latestException = null;
-            } catch (Exception ce) {
-                if (logger.isDebugEnabled()) {
-                    logger.debug("Exception white collecting device data.", ce);
-                }
-                if (ce instanceof ConnectException) {
-                    String message = ce.getMessage();
-                    if (!StringUtils.isEmpty(message) && message.contains("Connection timed out")) {
-                        logger.warn("Connection timed out: Unable to connect to the device, TCP protocol is occupied.");
-                        internalOutletStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, UNAVAILABLE);
-                        localStatistics.getControllableProperties().clear();
-                    } else {
-                        latestException = ce;
-                    }
-                }
-            } finally {
-                controlOperationsLock.unlock();
-                try {
-                    disconnect();
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
+            // CompletableFuture.cancel() does not interrupt a running task, so cancelling and resubmitting would only
+            // queue a second cycle behind the running one. Let the running cycle finish and serve the latest snapshot.
+            if (logger.isDebugEnabled()) {
+                logger.debug("Previous data collection cycle is still in progress. Skipping new cycle.");
             }
-        }, executorService);
+        } else {
+            dataCollector = runAsync(this::collectDeviceData, executorService);
+        }
 
         if (latestException != null) {
             throw latestException;
         }
-        outletsStatistics.putAll(localStatistics.getStatistics());
-        controllableProperties.addAll(localStatistics.getControllableProperties());
-        return Collections.singletonList(statistics);
+        return Collections.singletonList(copyLocalStatistics());
+    }
+
+    /**
+     * Collect device data into fresh collections and publish them as a new snapshot once the cycle is complete.
+     * Nothing shared is modified while TCP communication is in progress.
+     */
+    private void collectDeviceData() {
+        controlOperationsLock.lock();
+        try {
+            if (isValidControlCoolDown()) {
+                // A control operation ran while this cycle was waiting for the lock, the device needs time to settle
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Control operation was performed recently. Skipping monitoring statistics retrieval.");
+                }
+                return;
+            }
+            if (logger.isDebugEnabled()) {
+                logger.debug("Device is not occupied by control operations. Retrieving monitoring statistics.");
+            }
+            refreshTCPSession();
+
+            Map<String, String> newStatistics = new HashMap<>();
+            List<AdvancedControllableProperty> newControllableProperties = new ArrayList<>();
+            fetchOutletsData(newStatistics, newControllableProperties);
+            newStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, AVAILABLE);
+
+            synchronized (statisticsLock) {
+                localStatistics = createStatistics(newStatistics, newControllableProperties);
+            }
+            if (logger.isDebugEnabled()) {
+                logger.debug(String.format("Collection cycle finished: %d properties, %d controls %s", newStatistics.size(),
+                        newControllableProperties.size(), newControllableProperties.stream().map(AdvancedControllableProperty::getName).collect(java.util.stream.Collectors.toList())));
+            }
+            latestException = null;
+        } catch (Exception ce) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Exception white collecting device data.", ce);
+            }
+            if (ce instanceof ConnectException) {
+                String message = ce.getMessage();
+                if (!StringUtils.isEmpty(message) && message.contains("Connection timed out")) {
+                    logger.warn("Connection timed out: Unable to connect to the device, TCP protocol is occupied.");
+                    synchronized (statisticsLock) {
+                        // Keep the last known values, mark the protocol unavailable and drop the controls
+                        Map<String, String> unavailableStatistics = new HashMap<>(localStatistics.getStatistics());
+                        unavailableStatistics.put(CONTROL_PROTOCOL_STATUS_PROPERTY, UNAVAILABLE);
+                        localStatistics = createStatistics(unavailableStatistics, new ArrayList<>());
+                    }
+                } else {
+                    latestException = ce;
+                }
+            }
+        } finally {
+            controlOperationsLock.unlock();
+            try {
+                disconnect();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    /**
+     * Create an ExtendedStatistics instance with the given contents
+     * @param statistics monitored properties
+     * @param controllableProperties controls
+     * @return ExtendedStatistics instance
+     */
+    private static ExtendedStatistics createStatistics(Map<String, String> statistics, List<AdvancedControllableProperty> controllableProperties) {
+        ExtendedStatistics extendedStatistics = new ExtendedStatistics();
+        extendedStatistics.setStatistics(statistics);
+        extendedStatistics.setControllableProperties(controllableProperties);
+        return extendedStatistics;
+    }
+
+    /**
+     * Check whether the key is an outlet state key (Outlets#Outlet<n>), as opposed to an outlet name entry
+     * (Outlets#Outlet<n>Name) or any other property
+     * @param key property key
+     * @return true for outlet state keys
+     */
+    private static boolean isOutletStateKey(String key) {
+        return key != null && OUTLET_STATE_KEY.matcher(key).matches();
+    }
+
+    /**
+     * Copy the latest snapshot so the returned collections are never modified by the data collector or control operations.
+     * Adapter metadata is added to the copy only (computed per call, so uptime is current), never to the cached snapshot.
+     * @return ExtendedStatistics copy of the local statistics, with adapter metadata
+     */
+    private ExtendedStatistics copyLocalStatistics() {
+        Map<String, String> statistics;
+        List<AdvancedControllableProperty> controllableProperties;
+        synchronized (statisticsLock) {
+            statistics = new HashMap<>(localStatistics.getStatistics());
+            controllableProperties = new ArrayList<>(localStatistics.getControllableProperties());
+        }
+        statistics.putAll(adapterMetadata.statistics());
+        return createStatistics(statistics, controllableProperties);
+    }
+
+    /**
+     * Send a request to the device, logging the raw request and response bytes in hex at debug level
+     * to diagnose malformed, misaligned or unexpected (error frame, unsolicited ping) responses.
+     *
+     * @param label human-readable request name for the log
+     * @param request request bytes
+     * @param logRequestBytes false for requests carrying credentials (login), so they never reach the log
+     * @return response bytes
+     * @throws Exception during TCP communication
+     */
+    private byte[] sendAndLog(String label, byte[] request, boolean logRequestBytes) throws Exception {
+        boolean debug = logger.isDebugEnabled();
+        if (debug) {
+            logger.debug(String.format("[%s] >> %s", label, logRequestBytes ? toHex(request) : "<" + request.length + " bytes, contents hidden>"));
+        }
+        byte[] response;
+        try {
+            response = send(request);
+        } catch (Exception e) {
+            if (debug) {
+                logger.debug(String.format("[%s] << no response: %s: %s", label, e.getClass().getSimpleName(), e.getMessage()));
+            }
+            throw e;
+        }
+        if (debug) {
+            logger.debug(String.format("[%s] << %s (%d bytes)", label, toHex(response), response == null ? 0 : response.length));
+        }
+        return response;
+    }
+
+    /**
+     * Format bytes as space-separated uppercase hex, e.g. "FE 03 00 22 02 25 FF"
+     * @param bytes bytes to format
+     * @return hex string
+     */
+    private static String toHex(byte[] bytes) {
+        if (bytes == null) {
+            return "null";
+        }
+        StringBuilder sb = new StringBuilder(bytes.length * 3);
+        for (byte b : bytes) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(String.format("%02X", b & 0xFF));
+        }
+        return sb.toString();
     }
 
     private void refreshTCPSession() throws Exception {
@@ -253,7 +377,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
         }
         String data = String.format("%s|%s", getLogin(), getPassword());
         byte[] loginRequest = buildLoginCommand(data);
-        byte[] response = send(loginRequest);
+        byte[] response = sendAndLog("Login", loginRequest, false);
         if(response.length < 6){
             throw new RuntimeException("TCP login failed.");
         }
@@ -378,7 +502,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
     }
 
     /***
-     * Fetch outlets data: name, number, state, control abilities
+     * Fetch outlets data: number, state, control abilities. Outlets are reported as Outlets#Outlet<number>, names as Outlets#Outlet<number>Name
      * @param outletsStatistics to add outlet stats to
      * @param controllableProperties to add controls to
      * @throws Exception during TCP communication
@@ -388,30 +512,34 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
             logger.debug("Fetching outlet information for device " + getHost());
         }
         byte[] outletsRequest = new byte[]{HEAD, 0x03, 0x00, 0x22, 0x02, 0x25, TAIL};
-        byte[] response = send(outletsRequest);
+        byte[] response = sendAndLog("Outlets state", outletsRequest, true);
         byte[] data = Arrays.copyOfRange(response, 5, response.length - 2); // 4 bytes envelope at the beginning and 2 at the end
 
-        int number = 1;
         int enabledControlled = 0;
         int disabledControlled = 0;
 
-        for(byte state: data){
+        for (int i = 0; i < data.length; i++) {
+            // Outlet number is derived from the byte position, so skipping an outlet (continue) can never
+            // shift the numbering of the outlets that follow it
+            byte state = data[i];
+            int number = i + 1;
             if(state == 0x58){
                 if(logger.isInfoEnabled()){
                     logger.debug(String.format("Outlet #%s does not exist", number));
                 }
             } else if (state == 0x43 || state == 0x4E){
                 // 0x43 is controllable, 0x4E is not controllable
-                String outletNameRaw = getOutletName((byte)number);
-                if(StringUtils.isEmpty(outletNameRaw)){
-                    continue;
-                }
-
                 boolean controllableOutlet = state == 0x43;
                 int outletStatus = getOutletStatus((byte) number);
 
-                String outletName = String.format("%s%s - %s", controllableOutlet ? "Controllable outlets#" : "", outletNameRaw, number);
+                String outletName = OUTLETS_GROUP + OUTLET_PREFIX + number;
                 outletsStatistics.put(outletName, controllableOutlet ? String.valueOf(outletStatus) :  outletStatus == 1 ? "On" : "Off");
+
+                // The name is informational only: a failed lookup omits the name entry but never skips the outlet
+                String deviceOutletName = getOutletName((byte) number);
+                if (!StringUtils.isEmpty(deviceOutletName)) {
+                    outletsStatistics.put(outletName + OUTLET_NAME_SUFFIX, deviceOutletName);
+                }
 
                 if (controllableOutlet) {
                     addControl(controllableProperties, createOutletSwitch(outletName, outletStatus));
@@ -422,7 +550,6 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                     }
                 }
             }
-            number++;
         }
 
         if(enabledControlled + disabledControlled > 0){
@@ -493,26 +620,25 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
     }
 
     /***
-     * Get the name of an outlet
-     * Envelope: 5 bytes at front and 2 at the end
+     * Get the name of an outlet, as configured on the device
+     * Envelope: 6 bytes at front and 2 at the end
      * @param outlet number of an outlet
-     * @return String value containing outlet name
+     * @return outlet name, or an empty string if the response is not a valid outlet name response
      * @throws Exception during TCP communication
      */
     private String getOutletName(byte outlet) throws Exception {
         int checksum = 293 + outlet; // envelope checksum
         byte[] bytes = {(byte) 0xFE, 0x04, 0x00, 0x21, 0x02, outlet, (byte) (checksum  & 0x007f),(byte) 0xFF};
-        byte[] response = send(bytes);
-        if(response[3] != 0x21){
-            if(logger.isDebugEnabled()){
-                logger.debug("Invalid response received for outlet name request. '33' byte value expected, but was: " + response[3]);
+        byte[] response = sendAndLog("Outlet #" + outlet + " name", bytes, true);
+        if (response == null || response.length < 8 || response[3] != 0x21) {
+            if (logger.isDebugEnabled()) {
+                logger.debug(String.format("Invalid response received for outlet #%s name request: %s", outlet, toHex(response)));
             }
             return "";
         }
-        String outletName = new String(Arrays.copyOfRange(response, 6, response.length - 2));
-        // we don't know if this one contains any specific characters, but may end up with an invalid db record
-        // so it's better to clean this up
-        return outletName.replaceAll("[^A-Za-z0-9()\\[\\]]", "");
+        String outletName = new String(Arrays.copyOfRange(response, 6, response.length - 2), java.nio.charset.StandardCharsets.US_ASCII);
+        // Name is a value (not a property key), so keep spaces and punctuation, drop only non-printable bytes (padding, control chars)
+        return outletName.replaceAll("[^\\x20-\\x7E]", "").trim();
     }
 
     /**
@@ -526,7 +652,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
         int checksum = 0xFE + 0x04 + 0x20 + 0x02;
         checksum += outlet;
         byte[] bytes = {(byte) 0xFE, 0x04, 0x00, 0x20, 0x02, outlet, (byte) (checksum  & 0x007f),(byte) 0xFF};
-        byte[] response = send(bytes);
+        byte[] response = sendAndLog("Outlet #" + outlet + " status", bytes, true);
 
         return response[response.length - 7];
     }
@@ -550,7 +676,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
             return false;
         } else {
             byte[] ping = {HEAD, 0x03, 0x00, 0x01, 0x10, 0x12, TAIL};
-            byte[] pingResponse = send(ping);
+            byte[] pingResponse = sendAndLog("Ping", ping, true);
 
             if (pingResponse[3] == 0x01 && pingResponse[4] == 0x01) {
                 return true;
@@ -566,7 +692,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
      * @throws Exception during TCP communication
      * */
     private byte sendControlCommand(byte[] cmd) throws Exception {
-        byte[] response = send(cmd);
+        byte[] response = sendAndLog("Outlet control", cmd, true);
         updateLatestControlTimestamp();
 
         return response[4] == 0x10 ? response[6] : cmd[6];
@@ -579,7 +705,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
      * @throws Exception during TCP communication
      * */
     private boolean sendSequencingCommand(byte[] cmd) throws Exception {
-        byte[] response = send(cmd);
+        byte[] response = sendAndLog("Sequence control", cmd, true);
         boolean success = (cmd[5] == 0x01 || cmd[5] == 0x03) && response[5] > 0x00;
         updateLatestControlTimestamp();
         return success;
@@ -591,7 +717,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
      * @param sequence 0x01 is for UP 0x03 is for DOWN
      */
     private void updateLocalSequencingStatistics(byte sequence){
-        if(localStatistics != null){
+        synchronized (statisticsLock) {
             Map<String, String> statistics = localStatistics.getStatistics();
 
             if(sequence == 0x01){
@@ -599,14 +725,14 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
                     logger.debug("Removing 'Sequence up' button from local statistics.");
                 }
                 replaceLocalStatisticsControls(SEQUENCE_UP_COMMAND_NAME, SEQUENCE_DOWN_COMMAND_NAME);
-                statistics.keySet().forEach(s -> { if("0".equals(statistics.get(s))) statistics.put(s, "1"); });
+                statistics.keySet().forEach(s -> { if(isOutletStateKey(s) && "0".equals(statistics.get(s))) statistics.put(s, "1"); });
                 processOutletsSequence(1);
             } else if (sequence == 0x03){
                 if(logger.isDebugEnabled()){
                     logger.debug("Removing 'Sequence down' button from local statistics.");
                 }
                 replaceLocalStatisticsControls(SEQUENCE_DOWN_COMMAND_NAME, SEQUENCE_UP_COMMAND_NAME);
-                statistics.keySet().forEach(s -> { if("1".equals(statistics.get(s))) statistics.put(s, "0"); });
+                statistics.keySet().forEach(s -> { if(isOutletStateKey(s) && "1".equals(statistics.get(s))) statistics.put(s, "0"); });
                 processOutletsSequence(0);
             }
 
@@ -624,7 +750,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
      * */
     private void processOutletsSequence(int state){
         localStatistics.getControllableProperties().forEach(cp -> {
-            if(cp.getName().startsWith("Controllable outlets")) {
+            if(isOutletStateKey(cp.getName())) {
                 cp.setValue(state);
                 cp.setTimestamp(new Date());
             }
@@ -669,14 +795,17 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
         if(logger.isInfoEnabled()){
             logger.info(String.format("Updating local outlet control state: Outlet '%s' with requestedState '%s' and actual state '%s'", outletName, requestedState, actualState));
         }
-        if(localStatistics != null && requestedState.equals(actualState)){
+        if(!requestedState.equals(actualState)){
+            return;
+        }
+        synchronized (statisticsLock) {
             localStatistics.getStatistics().put(outletName, actualState);
             localStatistics.getControllableProperties().stream().filter(advancedControllableProperty ->
                     advancedControllableProperty.getName().equals(outletName))
                     .findFirst().ifPresent(advancedControllableProperty -> advancedControllableProperty.setValue(actualState));
 
-            int outletsOff = (int) localStatistics.getStatistics().keySet().stream().filter(s -> "0".equals(localStatistics.getStatistics().get(s))).count();
-            int outletsOn = (int) localStatistics.getStatistics().keySet().stream().filter(s -> "1".equals(localStatistics.getStatistics().get(s))).count();
+            int outletsOff = (int) localStatistics.getStatistics().keySet().stream().filter(s -> isOutletStateKey(s) && "0".equals(localStatistics.getStatistics().get(s))).count();
+            int outletsOn = (int) localStatistics.getStatistics().keySet().stream().filter(s -> isOutletStateKey(s) && "1".equals(localStatistics.getStatistics().get(s))).count();
 
             if(requestedState.equals("1")){
                 if(outletsOff == 0) {

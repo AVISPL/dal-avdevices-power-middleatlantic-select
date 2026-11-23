@@ -6,11 +6,30 @@
 
     <groupId>com.avispl.symphony.dal.device.middleatlantic.select</groupId>
     <artifactId>symphony-dal-communicator-middleatlantic-select</artifactId>
-    <version>1.0.6</version>
+    <version>1.0.7</version>
     <properties>
         <symphonyApiVersion>RELEASE</symphonyApiVersion>
+        <maven.build.timestamp.format>yyyy-MM-dd HH:mm:ss</maven.build.timestamp.format>
+        <timestamp>${maven.build.timestamp}</timestamp>
     </properties>
     <build>
+        <resources>
+            <!-- version.properties is filtered to carry the adapter version and build date (AdapterMetadata) -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>version.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>version.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

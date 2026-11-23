@@ -82,6 +82,11 @@ public class MiddleAtlanticPowerUnitCommunicatorTest {
     public void getMultipleStatisticsTest() throws Exception {
         middleAtlanticPowerUnitCommunicator.init();
         List<Statistics> stats = middleAtlanticPowerUnitCommunicator.getMultipleStatistics();
+        Thread.sleep(30000);
+        stats = middleAtlanticPowerUnitCommunicator.getMultipleStatistics();
+        Thread.sleep(30000);
+        stats = middleAtlanticPowerUnitCommunicator.getMultipleStatistics();
+        Thread.sleep(30000);
         Assert.assertNotEquals(0, ((ExtendedStatistics)stats.get(0)).getStatistics().size());
         Assert.assertNotEquals(0, ((ExtendedStatistics)stats.get(0)).getControllableProperties().size());
     }
