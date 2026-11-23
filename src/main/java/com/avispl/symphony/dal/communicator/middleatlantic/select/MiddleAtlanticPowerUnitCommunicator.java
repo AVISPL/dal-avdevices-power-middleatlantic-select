@@ -154,7 +154,7 @@ public class MiddleAtlanticPowerUnitCommunicator extends SocketCommunicator impl
     @Override
     public void controlProperties(List<ControllableProperty> controllablePropertyList) throws Exception {
         if (CollectionUtils.isEmpty(controllablePropertyList)) {
-            throw new IllegalArgumentException("NetGearCommunicator: Controllable properties cannot be null or empty");
+            throw new IllegalArgumentException("MiddleAtlanticPowerUnitCommunicator: Controllable properties cannot be null or empty");
         }
 
         for(ControllableProperty controllableProperty: controllablePropertyList){
